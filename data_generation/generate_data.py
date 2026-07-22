@@ -39,22 +39,24 @@ def generate_customers(n_customers: int) -> pd.DataFrame:
 
     df["risk_level"] = df.apply(risk_row, axis=1)
     return df
+
+
 MERCHANT_CATEGORIES = ["grocery", "electronics", "travel", "gambling", "crypto", "jewelry", "utilities"]
+
 
 def generate_merchants(n_merchants: int) -> pd.DataFrame:
     merchant_ids = [f"MERCH_{i:06d}" for i in range(n_merchants)]
     categories = rng.choice(MERCHANT_CATEGORIES, size=n_merchants)
     countries = rng.choice(COUNTRIES, size=n_merchants)
     CATEGORY_TICKET_MEAN = {
-    "jewelry": 5.5,
-    "travel": 5.5,
-    "crypto": 4.5,
-    "gambling": 4.5,
-    "electronics": 4.5,
-    "grocery": 2.5,
-    "utilities": 2.5,
+        "jewelry": 5.5,
+        "travel": 5.5,
+        "crypto": 4.5,
+        "gambling": 4.5,
+        "electronics": 4.5,
+        "grocery": 2.5,
+        "utilities": 2.5,
     }
-
 
     base_risk = np.select(
         [np.isin(categories, ["gambling", "crypto"]), categories == "jewelry"],
@@ -76,6 +78,11 @@ def generate_merchants(n_merchants: int) -> pd.DataFrame:
 
 CHANNELS = ["online", "pos", "atm", "mobile"]
 
+
+def _random_ip():
+    return f"{rng.integers(1,255)}.{rng.integers(1,255)}.{rng.integers(1,255)}.{rng.integers(1,255)}"
+
+
 def generate_normal_transactions(customers, merchants, n):
     cust_sample = customers.sample(n, replace=True, random_state=1)
     merch_sample = merchants.sample(n, replace=True, random_state=2)
@@ -88,6 +95,15 @@ def generate_normal_transactions(customers, merchants, n):
     start = datetime(2024, 1, 1)
     timestamps = [start + timedelta(seconds=int(s)) for s in rng.integers(0, 365 * 24 * 3600, size=n)]
 
+    ip_addresses = [
+        f"{a}.{b}.{c}.{d}" for a, b, c, d in zip(
+            rng.integers(1, 255, size=n),
+            rng.integers(1, 255, size=n),
+            rng.integers(1, 255, size=n),
+            rng.integers(1, 255, size=n),
+        )
+    ]
+
     return pd.DataFrame({
         "transaction_id": [str(uuid.uuid4()) for _ in range(n)],
         "customer_id": cust_sample["customer_id"].values,
@@ -98,7 +114,10 @@ def generate_normal_transactions(customers, merchants, n):
         "channel": rng.choice(CHANNELS, size=n),
         "fraud_label": 0,
         "fraud_type": "none",
+        "ip_address": ip_addresses,
     })
+
+
 def generate_card_testing_fraud(customers, merchants, n_incidents):
     rows = []
     for _ in range(n_incidents):
@@ -117,8 +136,11 @@ def generate_card_testing_fraud(customers, merchants, n_incidents):
                 "channel": "online",
                 "fraud_label": 1,
                 "fraud_type": "card_testing",
+                "ip_address": _random_ip(),
             })
     return pd.DataFrame(rows)
+
+
 def generate_account_takeover_fraud(customers, merchants, n_incidents):
     rows = []
     for _ in range(n_incidents):
@@ -134,8 +156,11 @@ def generate_account_takeover_fraud(customers, merchants, n_incidents):
             "channel": "online",
             "fraud_label": 1,
             "fraud_type": "account_takeover",
+            "ip_address": _random_ip(),
         })
     return pd.DataFrame(rows)
+
+
 def generate_structuring_fraud(customers, merchants, n_incidents):
     rows = []
     for _ in range(n_incidents):
@@ -154,26 +179,70 @@ def generate_structuring_fraud(customers, merchants, n_incidents):
                 "channel": "pos",
                 "fraud_label": 1,
                 "fraud_type": "structuring",
+                "ip_address": _random_ip(),
             })
     return pd.DataFrame(rows)
-if __name__ == "__main__":
-    customers = generate_customers(5000)
-    merchants = generate_merchants(300)
-    normal = generate_normal_transactions(customers, merchants, 80000)
+
+
+def generate_laundering_ring(customers, merchants, ring_size=5, n_transactions_per_member=15):
+    ring_customers = customers.sample(ring_size, random_state=99)
+    ring_merchants = merchants.sample(2, random_state=99)  # concentrated on just 2 merchants
+    shared_ip = "203.0.113.42"  # one shared IP, reused for SOME transactions
+
+    rows = []
+    for _, cust in ring_customers.iterrows():
+        for i in range(n_transactions_per_member):
+            merch = ring_merchants.sample(1).iloc[0]
+            use_shared_ip = rng.random() < 0.4  # only 40% of their transactions share the IP
+            rows.append({
+                "transaction_id": str(uuid.uuid4()),
+                "customer_id": cust["customer_id"],
+                "merchant_id": merch["merchant_id"],
+                "timestamp": datetime(2024, 1, 1) + timedelta(seconds=int(rng.integers(0, 365 * 24 * 3600))),
+                "amount": round(float(rng.uniform(100, 800)), 2),
+                "country": merch["country"],
+                "channel": rng.choice(CHANNELS),
+                "fraud_label": 0,  # deliberately NOT flagged here - only visible via graph structure
+                "fraud_type": "none",
+                "ip_address": shared_ip if use_shared_ip else f"198.51.100.{rng.integers(1, 255)}",
+            })
+    return pd.DataFrame(rows), list(ring_customers["customer_id"])
+
+
+def generate_dataset(n_customers=5000, n_merchants=300, n_normal_tx=80000):
+    customers = generate_customers(n_customers)
+    merchants = generate_merchants(n_merchants)
+
+    normal = generate_normal_transactions(customers, merchants, n_normal_tx)
     card_testing = generate_card_testing_fraud(customers, merchants, n_incidents=15)
-    print(card_testing.head(20))
-    print(card_testing[["customer_id", "timestamp", "amount"]].head(20))
     account_takeover = generate_account_takeover_fraud(customers, merchants, n_incidents=20)
     structuring = generate_structuring_fraud(customers, merchants, n_incidents=15)
-    print(structuring[["customer_id", "timestamp", "amount"]].head(15))
-    transactions = pd.concat([normal, card_testing, account_takeover, structuring], ignore_index=True)
+    ring_transactions, ring_customer_ids = generate_laundering_ring(customers, merchants)
+
+    transactions = pd.concat(
+        [normal, card_testing, account_takeover, structuring, ring_transactions],
+        ignore_index=True,
+    )
     transactions = transactions.sample(frac=1, random_state=7).reset_index(drop=True)
 
-    print(f"Total transactions: {len(transactions):,}")
-    print(f"Fraud rate: {transactions['fraud_label'].mean():.4%}")
-    print(transactions['fraud_type'].value_counts())
+    return customers, merchants, transactions, ring_customer_ids
+
+
+if __name__ == "__main__":
+    customers, merchants, transactions, ring_customer_ids = generate_dataset()
+
+    print(f"Customers:   {len(customers):,}")
+    print(f"Merchants:   {len(merchants):,}")
+    print(f"Transactions:{len(transactions):,}")
+    print(f"Fraud rate:  {transactions['fraud_label'].mean():.4%}")
+    print(transactions["fraud_type"].value_counts())
+    print(f"Ring customers (ground truth, not a column): {ring_customer_ids}")
+
     customers.to_csv("data/raw/customers.csv", index=False)
     merchants.to_csv("data/raw/merchants.csv", index=False)
     transactions.to_csv("data/raw/transactions.csv", index=False)
+
+    # save ring ground truth separately for later graph validation
+    pd.DataFrame({"customer_id": ring_customer_ids}).to_csv("data/raw/ring_ground_truth.csv", index=False)
     
     
