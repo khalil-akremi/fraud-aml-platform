@@ -3,6 +3,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 import uuid
 
+from generate_rings import generate_all_rings
+
 rng = np.random.default_rng(42)  # fixed seed = reproducible results
 
 COUNTRIES = ["US", "GB", "FR", "DE", "AE", "NG", "RU", "CN", "BR", "TN"]
@@ -184,31 +186,6 @@ def generate_structuring_fraud(customers, merchants, n_incidents):
     return pd.DataFrame(rows)
 
 
-def generate_laundering_ring(customers, merchants, ring_size=5, n_transactions_per_member=15):
-    ring_customers = customers.sample(ring_size, random_state=99)
-    ring_merchants = merchants.sample(2, random_state=99)  # concentrated on just 2 merchants
-    shared_ip = "203.0.113.42"  # one shared IP, reused for SOME transactions
-
-    rows = []
-    for _, cust in ring_customers.iterrows():
-        for i in range(n_transactions_per_member):
-            merch = ring_merchants.sample(1).iloc[0]
-            use_shared_ip = rng.random() < 0.4  # only 40% of their transactions share the IP
-            rows.append({
-                "transaction_id": str(uuid.uuid4()),
-                "customer_id": cust["customer_id"],
-                "merchant_id": merch["merchant_id"],
-                "timestamp": datetime(2024, 1, 1) + timedelta(seconds=int(rng.integers(0, 365 * 24 * 3600))),
-                "amount": round(float(rng.uniform(100, 800)), 2),
-                "country": merch["country"],
-                "channel": rng.choice(CHANNELS),
-                "fraud_label": 0,  # deliberately NOT flagged here - only visible via graph structure
-                "fraud_type": "none",
-                "ip_address": shared_ip if use_shared_ip else f"198.51.100.{rng.integers(1, 255)}",
-            })
-    return pd.DataFrame(rows), list(ring_customers["customer_id"])
-
-
 def generate_dataset(n_customers=5000, n_merchants=300, n_normal_tx=80000):
     customers = generate_customers(n_customers)
     merchants = generate_merchants(n_merchants)
@@ -217,7 +194,7 @@ def generate_dataset(n_customers=5000, n_merchants=300, n_normal_tx=80000):
     card_testing = generate_card_testing_fraud(customers, merchants, n_incidents=15)
     account_takeover = generate_account_takeover_fraud(customers, merchants, n_incidents=20)
     structuring = generate_structuring_fraud(customers, merchants, n_incidents=15)
-    ring_transactions, ring_customer_ids = generate_laundering_ring(customers, merchants)
+    ring_transactions, ring_ground_truth = generate_all_rings(customers, merchants)
 
     transactions = pd.concat(
         [normal, card_testing, account_takeover, structuring, ring_transactions],
@@ -225,24 +202,25 @@ def generate_dataset(n_customers=5000, n_merchants=300, n_normal_tx=80000):
     )
     transactions = transactions.sample(frac=1, random_state=7).reset_index(drop=True)
 
-    return customers, merchants, transactions, ring_customer_ids
+    return customers, merchants, transactions, ring_ground_truth
 
 
 if __name__ == "__main__":
-    customers, merchants, transactions, ring_customer_ids = generate_dataset()
+    customers, merchants, transactions, ring_ground_truth = generate_dataset()
 
     print(f"Customers:   {len(customers):,}")
     print(f"Merchants:   {len(merchants):,}")
     print(f"Transactions:{len(transactions):,}")
     print(f"Fraud rate:  {transactions['fraud_label'].mean():.4%}")
     print(transactions["fraud_type"].value_counts())
-    print(f"Ring customers (ground truth, not a column): {ring_customer_ids}")
+    print(f"\nRing ground truth ({len(ring_ground_truth)} customers across {ring_ground_truth['ring_id'].nunique()} rings):")
+    print(ring_ground_truth.groupby("ring_id").size())
 
     customers.to_csv("data/raw/customers.csv", index=False)
     merchants.to_csv("data/raw/merchants.csv", index=False)
     transactions.to_csv("data/raw/transactions.csv", index=False)
 
     # save ring ground truth separately for later graph validation
-    pd.DataFrame({"customer_id": ring_customer_ids}).to_csv("data/raw/ring_ground_truth.csv", index=False)
+    ring_ground_truth.to_csv("data/raw/ring_ground_truth.csv", index=False)
     
     
