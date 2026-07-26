@@ -5,8 +5,10 @@ from sqlalchemy import create_engine
 from sklearn.model_selection import TimeSeriesSplit
 from xgboost import XGBClassifier
 from sklearn.metrics import classification_report
-
+import mlflow
+import mlflow.xgboost
 load_dotenv()
+
 
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
@@ -51,8 +53,8 @@ X = df[feature_columns]
 y = df["fraud_label"]
 
 tscv = TimeSeriesSplit(n_splits=5)
-
-for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
+folds = list(tscv.split(X))
+for fold, (train_idx, test_idx) in enumerate(folds):
     X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
     y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
@@ -64,3 +66,16 @@ for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
     preds = model.predict(X_test)
     print(f"--- Fold {fold} (weighted, scale_pos_weight={scale_pos_weight:.1f}) ---")
     print(classification_report(y_test, preds, digits=3))
+
+    # only log the LAST fold to MLflow - our actual production candidate
+    if fold == len(folds) - 1:
+        report = classification_report(y_test, preds, output_dict=True)
+
+        with mlflow.start_run(run_name="fraud_detection_xgboost"):
+            mlflow.log_param("scale_pos_weight", scale_pos_weight)
+            mlflow.log_param("n_features", X.shape[1])
+            mlflow.log_metric("precision_fraud", report["1"]["precision"])
+            mlflow.log_metric("recall_fraud", report["1"]["recall"])
+            mlflow.log_metric("f1_fraud", report["1"]["f1-score"])
+            mlflow.xgboost.log_model(model, name="model")
+            print(f"\nLogged to MLflow. Run ID: {mlflow.active_run().info.run_id}")

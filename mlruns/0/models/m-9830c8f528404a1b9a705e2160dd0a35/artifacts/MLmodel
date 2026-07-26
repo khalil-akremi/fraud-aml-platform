@@ -1,0 +1,22 @@
+artifact_path: file:C:/Users/user/Desktop/fraud platform/mlruns/0/models/m-9830c8f528404a1b9a705e2160dd0a35/artifacts
+flavors:
+  python_function:
+    data: model.ubj
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.xgboost
+    python_version: 3.12.11
+  xgboost:
+    code: null
+    data: model.ubj
+    model_class: xgboost.sklearn.XGBClassifier
+    model_format: ubj
+    xgb_version: 3.3.0
+mlflow_version: 3.14.0
+model_id: m-9830c8f528404a1b9a705e2160dd0a35
+model_size_bytes: 140049
+model_uuid: m-9830c8f528404a1b9a705e2160dd0a35
+prompts: null
+run_id: e97b5a4ef3f347d3b2b37d4c1450132d
+utc_time_created: '2026-07-26 09:13:17.984549'
