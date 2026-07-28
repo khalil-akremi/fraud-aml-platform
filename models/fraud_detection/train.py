@@ -79,3 +79,6 @@ for fold, (train_idx, test_idx) in enumerate(folds):
             mlflow.log_metric("f1_fraud", report["1"]["f1-score"])
             mlflow.xgboost.log_model(model, name="model")
             print(f"\nLogged to MLflow. Run ID: {mlflow.active_run().info.run_id}")
+import json
+with open("models/fraud_detection/feature_columns.json", "w") as f:
+    json.dump(feature_columns, f)
